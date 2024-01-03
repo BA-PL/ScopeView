@@ -1,0 +1,251 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.4">
+  <POU Name="FB_SIGNAL_GENERATOR" Id="{aa6cdf9b-f836-42c4-9ebd-9bf796f3928a}" SpecialFunc="None">
+    <Declaration><![CDATA[(*
+This function block generates the most common signals on rSignalOutput.
+Those include: SINUS, COSINUS, SQUARE, TRIANGLE, SAWTOOTH, DIRAC_DELTA,
+				SINGLE_DD, STEP, CONST, GAUSS_FUNC, SINC
+All functions are the functions of time.
+User provides all function parameters they want.
+Signal choice is performed by setting eSignal input which is of the type E_SIGNAL (enum).
+
+-----INPUTS-----
+See VAR_IPUT list below.
+
+-----OUTPUTS-----
+rSignalOutput	:REAL;		//generated signal
+
+-----More info-----
+All user specified inputs concerned TIME are DWORDs.
+
+Version:
+	TwinCAT 	3.1.2024.10
+	FB version 	1.0
+	Date 		08.2020
+*)
+
+FUNCTION_BLOCK PUBLIC FB_SIGNAL_GENERATOR
+VAR_INPUT
+	bEnable		:BOOL:=FALSE;	//when TRUE, signal is being generated, if FALSE rSignalOutput = 0
+	
+	//singal to be generated
+	eSignal		:E_SIGNAL:=E_SIGNAL.SINUS;	//selection of a signal
+	//properties:
+	rAmp		:REAL:=1;		//signal amplitude
+	dwPeriod	:DWORD:=1000;	//signal period in ms (milliseconds)
+	rFilling	:REAL:=0.5;		//(0.0 - 1.0), where 0.0 = 0% and 1.0 = 100%
+	dwStartOff	:DWORD:=0;		//start time offset in ms (milliseconds)/ delays beginning of the signal
+	rYOffset	:REAL:=0;		//Y-offset
+	
+	//Note!
+	rXOffset	:REAL:=0;		//X-offset in ms (milliseconds) applays only to GAUSS_FUNC and SINC
+	
+	//Gauss function variable
+	rGaussStandardDeviation		:DWORD:=1000;	//width of Gauss SD zone in ms (milliseconds)
+	
+	//Sinc function variable
+	rSINCScaleFactor			:REAL:=LREAL_TO_REAL(PI);		//variable scaling SINC argument, when =PI, SINC is normalized
+END_VAR
+VAR_OUTPUT
+	rSignalOutput	:REAL;		//generated signal
+END_VAR
+VAR
+	tonTimer		:TON;		//timer which ET is a time argument for generating signal
+	tonOffset		:TON;		//timer which Q is used to offset start of signal generation
+	tonPulsator		:TON;		//generates pulses periodically (dwPeriod)
+	rRawSignal		:REAL;		//raw signal
+	rSawtoothSignal	:REAL;		//a sawtooth signal with period of dwPeriod
+	
+	iStep			:INT:=0;	//case selector
+	rFuncArg		:REAL:=1;	//auxiliary variable
+END_VAR
+VAR CONSTANT
+	timeMax		:TIME:=T#4294967295MS;	//DWORD/TIME Upper bound
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[//initialize timer tonOffset to count signal start offset
+tonOffset(IN:=bEnable, PT:=DWORD_TO_TIME(dwStartOff));
+//initialize timer which ET is a time argument for generating signal
+tonTimer(IN:=bEnable AND tonOffset.Q, PT:=timeMax);
+//a sawtooth signal with period of dwPeriod
+rSawtoothSignal := DWORD_TO_REAL(((TIME_TO_DWORD(tonTimer.ET)) MOD dwPeriod)) / DWORD_TO_REAL(dwPeriod);
+
+//catch error - div by 0
+IF dwPeriod = 0 THEN dwPeriod := 1; END_IF
+
+//catch error - rFilling out of bounds
+IF rFilling < 0 THEN rFilling := 0; 
+ELSIF rFilling > 1 THEN rFilling := 1; END_IF
+
+//catch error - div by 0
+IF rGaussStandardDeviation = 0 THEN rGaussStandardDeviation := 2000; END_IF
+
+CASE eSignal OF
+	
+	//-----PERIODIC SIGNALS-----
+	
+	E_SIGNAL.SINUS:
+		rRawSignal := LREAL_TO_REAL(SIN(2 * PI * TIME_TO_REAL(tonTimer.ET)/dwPeriod));
+		
+	E_SIGNAL.COSINUS:
+		rRawSignal := LREAL_TO_REAL(COS(2 * PI * TIME_TO_REAL(tonTimer.ET)/dwPeriod));
+	
+	E_SIGNAL.SQUARE:
+		IF rSawtoothSignal < rFilling 
+		AND tonOffset.Q THEN
+			rRawSignal := 1;
+		ELSE
+			rRawSignal := 0;
+		END_IF
+	
+	E_SIGNAL.TRIANGLE:
+		IF rSawtoothSignal > 0.5 THEN
+			rRawSignal := 2 * (1 - rSawtoothSignal);
+		ELSE
+			rRawSignal := 2 * rSawtoothSignal;
+		END_IF
+	
+	E_SIGNAL.SAWTOOTH:
+		rRawSignal := rSawtoothSignal;
+	
+	E_SIGNAL.DIRAC_DELTA:
+		CASE iStep OF
+			0:
+				IF tonOffset.Q THEN
+					rRawSignal := 1;
+					iStep := 10;
+				END_IF
+			10: 
+				tonPulsator(IN:=tonOffset.Q AND NOT tonPulsator.Q, PT:=DWORD_TO_TIME(dwPeriod));
+				rRawSignal := BOOL_TO_REAL(tonPulsator.Q);
+				
+				IF bEnable = FALSE THEN 
+					iStep := 0;
+				END_IF
+		END_CASE
+		
+	E_SIGNAL.SINGLE_DD:
+		CASE iStep OF
+			0:
+				IF tonOffset.Q THEN
+					rRawSignal := 1;
+					iStep := 10;
+				END_IF
+			10: 
+				rRawSignal := 0;
+				iStep := 20;
+			20:
+				IF bEnable = FALSE THEN 
+					iStep := 0;
+				END_IF
+		END_CASE
+	
+	E_SIGNAL.STEP:
+		rRawSignal := BOOL_TO_REAL(tonOffset.Q);
+	
+	//-----OTHER-----
+	
+	E_SIGNAL.CONST:
+		rRawSignal := 1;
+		
+	E_SIGNAL.GAUSS_FUNC:
+		rRawSignal := LREAL_TO_REAL(EXP( - EXPT(TIME_TO_REAL(tonTimer.ET) - rXOffset, 2) / (2 * EXPT(rGaussStandardDeviation,2))));
+	
+	E_SIGNAL.SINC:
+		rFuncArg := rSINCScaleFactor * LREAL_TO_REAL(2 * PI * (TIME_TO_REAL(tonTimer.ET) - rXOffset)/DWORD_TO_REAL(dwPeriod));
+		IF rFuncArg = 0 THEN
+			rRawSignal := 1;
+		ELSE 
+			rRawSignal := LREAL_TO_REAL(SIN(rFuncArg)/rFuncArg);
+		END_IF
+		
+	ELSE //if the signal was not specified set output to 0
+		rSignalOutput := 0;
+END_CASE
+
+//if signal is not beeing generated set rRawSignal to relative 0
+//so that after scaling it was set to offset coordinates
+IF  NOT tonOffset.Q THEN rRawSignal := 0; END_IF
+
+//scale signal and add offset
+rSignalOutput := rRawSignal * rAmp + rYOffset;
+
+//if FB is not active bEnable=FALSE, set rSignalOutput to absolute 0 
+IF bEnable = FALSE  THEN rSignalOutput := 0; END_IF]]></ST>
+    </Implementation>
+    <LineIds Name="FB_SIGNAL_GENERATOR">
+      <LineId Id="98" Count="0" />
+      <LineId Id="93" Count="0" />
+      <LineId Id="99" Count="0" />
+      <LineId Id="96" Count="0" />
+      <LineId Id="113" Count="0" />
+      <LineId Id="97" Count="0" />
+      <LineId Id="123" Count="2" />
+      <LineId Id="160" Count="1" />
+      <LineId Id="159" Count="0" />
+      <LineId Id="162" Count="0" />
+      <LineId Id="199" Count="0" />
+      <LineId Id="198" Count="0" />
+      <LineId Id="200" Count="0" />
+      <LineId Id="114" Count="0" />
+      <LineId Id="127" Count="0" />
+      <LineId Id="129" Count="0" />
+      <LineId Id="128" Count="0" />
+      <LineId Id="130" Count="0" />
+      <LineId Id="86" Count="0" />
+      <LineId Id="89" Count="0" />
+      <LineId Id="92" Count="0" />
+      <LineId Id="39" Count="0" />
+      <LineId Id="90" Count="0" />
+      <LineId Id="100" Count="1" />
+      <LineId Id="103" Count="0" />
+      <LineId Id="278" Count="0" />
+      <LineId Id="102" Count="0" />
+      <LineId Id="104" Count="2" />
+      <LineId Id="110" Count="1" />
+      <LineId Id="116" Count="3" />
+      <LineId Id="112" Count="0" />
+      <LineId Id="120" Count="2" />
+      <LineId Id="143" Count="1" />
+      <LineId Id="168" Count="7" />
+      <LineId Id="181" Count="0" />
+      <LineId Id="185" Count="0" />
+      <LineId Id="183" Count="1" />
+      <LineId Id="182" Count="0" />
+      <LineId Id="167" Count="0" />
+      <LineId Id="145" Count="2" />
+      <LineId Id="149" Count="0" />
+      <LineId Id="151" Count="1" />
+      <LineId Id="154" Count="0" />
+      <LineId Id="153" Count="0" />
+      <LineId Id="155" Count="2" />
+      <LineId Id="163" Count="3" />
+      <LineId Id="150" Count="0" />
+      <LineId Id="148" Count="0" />
+      <LineId Id="133" Count="0" />
+      <LineId Id="136" Count="1" />
+      <LineId Id="186" Count="5" />
+      <LineId Id="201" Count="0" />
+      <LineId Id="138" Count="0" />
+      <LineId Id="202" Count="0" />
+      <LineId Id="211" Count="0" />
+      <LineId Id="205" Count="1" />
+      <LineId Id="208" Count="1" />
+      <LineId Id="207" Count="0" />
+      <LineId Id="203" Count="0" />
+      <LineId Id="40" Count="1" />
+      <LineId Id="37" Count="0" />
+      <LineId Id="298" Count="0" />
+      <LineId Id="216" Count="0" />
+      <LineId Id="301" Count="0" />
+      <LineId Id="294" Count="0" />
+      <LineId Id="299" Count="0" />
+      <LineId Id="297" Count="0" />
+      <LineId Id="32" Count="0" />
+      <LineId Id="302" Count="0" />
+      <LineId Id="282" Count="0" />
+      <LineId Id="217" Count="0" />
+    </LineIds>
+  </POU>
+</TcPlcObject>

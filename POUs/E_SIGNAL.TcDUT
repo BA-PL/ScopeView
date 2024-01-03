@@ -1,0 +1,29 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4024.4">
+  <DUT Name="E_SIGNAL" Id="{f0806bfc-7f05-44e0-9957-8ac01948fdcf}">
+    <Declaration><![CDATA[{attribute 'qualified_only'}
+{attribute 'strict'}
+TYPE E_SIGNAL :
+(
+	//periodic signals
+	SINUS 		:= 1,
+	COSINUS		:= 2,
+	SQUARE		:= 3,
+	TRIANGLE	:= 4,
+	SAWTOOTH	:= 5,
+	DIRAC_DELTA	:= 6,
+	
+	//discontinuous function
+	SINGLE_DD	:= 7,	//single dirac delta
+	STEP		:= 8,
+	
+	
+	//other
+	CONST 		:= 9,
+	GAUSS_FUNC	:= 10,
+	SINC		:= 11		
+);
+END_TYPE
+]]></Declaration>
+  </DUT>
+</TcPlcObject>
